@@ -20,8 +20,8 @@ namespace vcpkg::Commands::DependInfo
     const CommandStructure COMMAND_STRUCTURE = {
         Help::create_example_string(R"###(depend-info [pat])###"),
         0,
-        1,
-        { DEPEND_SWITCHES,{} },
+        SIZE_MAX,
+        {DEPEND_SWITCHES, {}},
         nullptr,
     };
 
@@ -116,34 +116,53 @@ namespace vcpkg::Commands::DependInfo
         return "";
     }
 
+    void get_dependencies(const std::vector<Dependency>& dependencies,
+                          const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files,
+                          std::set<std::string>& dependencyNames)
+    {
+        for (const auto& dependency : dependencies)
+        {
+            auto isNewElement = dependencyNames.insert(dependency.name()).second;
+            if (!isNewElement)
+            {
+                continue;
+            }
+
+            auto port_file = Util::find_if(source_control_files, [&](const auto& source_control_file) {
+                return source_control_file->core_paragraph->name == dependency.name();
+            });
+
+            if (port_file != source_control_files.end())
+            {
+                const auto& port_source_paragraph = *(*port_file)->core_paragraph;
+
+                get_dependencies(port_source_paragraph.depends, source_control_files, dependencyNames);
+            }
+        }
+    }
+
     void perform_and_exit(const VcpkgCmdArguments& args, const VcpkgPaths& paths)
     {
         const ParsedArguments options = args.parse_arguments(COMMAND_STRUCTURE);
 
         auto source_control_files = Paragraphs::load_all_ports(paths.get_filesystem(), paths.ports);
 
-        if (args.command_arguments.size() == 1)
+        if (args.command_arguments.size() >= 1)
         {
-            const std::string filter = args.command_arguments.at(0);
+            std::vector<Dependency> dependencies;
+            for (const auto& command_argument : args.command_arguments)
+            {
+                dependencies.push_back(Dependency::parse_dependency(command_argument, ""));
+            }
+
+            std::set<std::string> dependencyNames;
+            get_dependencies(dependencies, source_control_files, dependencyNames);
 
             Util::erase_remove_if(source_control_files,
                                   [&](const std::unique_ptr<SourceControlFile>& source_control_file) {
                                       const SourceParagraph& source_paragraph = *source_control_file->core_paragraph;
 
-                                      if (Strings::case_insensitive_ascii_contains(source_paragraph.name, filter))
-                                      {
-                                          return false;
-                                      }
-
-                                      for (const Dependency& dependency : source_paragraph.depends)
-                                      {
-                                          if (Strings::case_insensitive_ascii_contains(dependency.name(), filter))
-                                          {
-                                              return false;
-                                          }
-                                      }
-
-                                      return true;
+                                      return Util::find(dependencyNames, source_paragraph.name) == dependencyNames.end();
                                   });
         }
 
