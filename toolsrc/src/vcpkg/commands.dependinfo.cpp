@@ -116,27 +116,31 @@ namespace vcpkg::Commands::DependInfo
         return "";
     }
 
-    void get_dependencies(const std::vector<Dependency>& dependencies,
-                          const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files,
-                          std::set<std::string>& dependencyNames)
+    void build_dependency_tree(std::map<std::string, std::vector<std::string>>& dependency_tree,
+                               const std::vector<std::string>& dependency_names,
+                               const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files)
     {
-        for (const auto& dependency : dependencies)
+        for (const auto& dependency_name : dependency_names)
         {
-            auto isNewElement = dependencyNames.insert(dependency.name()).second;
-            if (!isNewElement)
+            if (!Util::Sets::contains(dependency_tree, dependency_name))
             {
-                continue;
-            }
+                const auto port_file = Util::find_if(source_control_files, [&](const auto& source_control_file) {
+                    return source_control_file->core_paragraph->name == dependency_name;
+                });
 
-            auto port_file = Util::find_if(source_control_files, [&](const auto& source_control_file) {
-                return source_control_file->core_paragraph->name == dependency.name();
-            });
+                if (port_file != source_control_files.end())
+                {
+                    dependency_tree[dependency_name] = {};
 
-            if (port_file != source_control_files.end())
-            {
-                const auto& port_source_paragraph = *(*port_file)->core_paragraph;
+                    const auto& port_source_paragraph = *(*port_file)->core_paragraph;
 
-                get_dependencies(port_source_paragraph.depends, source_control_files, dependencyNames);
+                    for (const auto& child_dependency : port_source_paragraph.depends)
+                    {
+                        dependency_tree[dependency_name].push_back(child_dependency.name());
+                    }
+
+                    build_dependency_tree(dependency_tree, dependency_tree[dependency_name], source_control_files);
+                }
             }
         }
     }
@@ -149,21 +153,8 @@ namespace vcpkg::Commands::DependInfo
 
         if (args.command_arguments.size() >= 1)
         {
-            std::vector<Dependency> dependencies;
-            for (const auto& command_argument : args.command_arguments)
-            {
-                dependencies.push_back(Dependency::parse_dependency(command_argument, ""));
-            }
-
-            std::set<std::string> dependencyNames;
-            get_dependencies(dependencies, source_control_files, dependencyNames);
-
-            Util::erase_remove_if(source_control_files,
-                                  [&](const std::unique_ptr<SourceControlFile>& source_control_file) {
-                                      const SourceParagraph& source_paragraph = *source_control_file->core_paragraph;
-
-                                      return Util::find(dependencyNames, source_paragraph.name) == dependencyNames.end();
-                                  });
+            std::map<std::string, std::vector<std::string>> dependency_tree;
+            build_dependency_tree(dependency_tree, args.command_arguments, source_control_files);
         }
 
         if (!options.switches.empty())
