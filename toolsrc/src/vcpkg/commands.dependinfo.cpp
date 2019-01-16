@@ -155,20 +155,36 @@ namespace vcpkg::Commands::DependInfo
         {
             std::map<std::string, std::vector<std::string>> dependency_tree;
             build_dependency_tree(dependency_tree, args.command_arguments, source_control_files);
-        }
 
-        if (!options.switches.empty())
-        {
-            const std::string graph_as_string = create_graph_as_string(options.switches, source_control_files);
-            System::println(graph_as_string);
-            Checks::exit_success(VCPKG_LINE_INFO);
-        }
+            if (!options.switches.empty())
+            {
+                const std::string graph_as_string = create_graph_as_string(options.switches, source_control_files);
+                System::println(graph_as_string);
+                Checks::exit_success(VCPKG_LINE_INFO);
+            }
 
-        for (auto&& source_control_file : source_control_files)
+            for (const auto& dependency : dependency_tree)
+            {
+                const auto dependencies = Strings::join(", ", dependency.second);
+                System::println("%s: %s", dependency.first, dependencies);
+            }
+        }
+        else
         {
-            const SourceParagraph& source_paragraph = *source_control_file->core_paragraph;
-            const auto s = Strings::join(", ", source_paragraph.depends, [](const Dependency& d) { return d.name(); });
-            System::println("%s: %s", source_paragraph.name, s);
+            if (!options.switches.empty())
+            {
+                const std::string graph_as_string = create_graph_as_string(options.switches, source_control_files);
+                System::println(graph_as_string);
+                Checks::exit_success(VCPKG_LINE_INFO);
+            }
+
+            for (auto&& source_control_file : source_control_files)
+            {
+                const SourceParagraph& source_paragraph = *source_control_file->core_paragraph;
+                const auto s =
+                    Strings::join(", ", source_paragraph.depends, [](const Dependency& d) { return d.name(); });
+                System::println("%s: %s", source_paragraph.name, s);
+            }
         }
 
         Checks::exit_success(VCPKG_LINE_INFO);
