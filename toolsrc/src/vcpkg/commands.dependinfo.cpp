@@ -32,28 +32,26 @@ namespace vcpkg::Commands::DependInfo
         return output;
     }
 
-    std::string create_dot_as_string(
-        const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files)
+    std::string create_dot_as_string(std::map<std::string, std::vector<std::string>>& dependency_tree)
     {
         int empty_node_count = 0;
 
         std::string s;
         s.append("digraph G{ rankdir=LR; edge [minlen=3]; overlap=false;");
 
-        for (const auto& source_control_file : source_control_files)
+        for (const auto& dependency : dependency_tree)
         {
-            const SourceParagraph& source_paragraph = *source_control_file->core_paragraph;
-            if (source_paragraph.depends.empty())
+            if (dependency.second.empty())
             {
                 empty_node_count++;
                 continue;
             }
 
-            const std::string name = replace_dashes_with_underscore(source_paragraph.name);
+            const std::string name = replace_dashes_with_underscore(dependency.first);
             s.append(Strings::format("%s;", name));
-            for (const Dependency& d : source_paragraph.depends)
+            for (const auto& d : dependency.second)
             {
-                const std::string dependency_name = replace_dashes_with_underscore(d.name());
+                const std::string dependency_name = replace_dashes_with_underscore(d);
                 s.append(Strings::format("%s -> %s;", name, dependency_name));
             }
         }
@@ -62,34 +60,21 @@ namespace vcpkg::Commands::DependInfo
         return s;
     }
 
-    std::string create_dgml_as_string(
-        const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files)
+    std::string create_dgml_as_string(std::map<std::string, std::vector<std::string>>& dependency_tree)
     {
         std::string s;
         s.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
         s.append("<DirectedGraph xmlns=\"http://schemas.microsoft.com/vs/2009/dgml\">");
 
         std::string nodes, links;
-        for (const auto& source_control_file : source_control_files)
+        for (const auto& dependency : dependency_tree)
         {
-            const SourceParagraph& source_paragraph = *source_control_file->core_paragraph;
-            const std::string name = source_paragraph.name;
-            nodes.append(Strings::format("<Node Id=\"%s\" />", name));
+            nodes.append(Strings::format("<Node Id=\"%s\" />", dependency.first));
 
             // Iterate over dependencies.
-            for (const Dependency& d : source_paragraph.depends)
+            for (const auto& d : dependency.second)
             {
-                links.append(Strings::format("<Link Source=\"%s\" Target=\"%s\" />", name, d.name()));
-            }
-
-            // Iterate over feature dependencies.
-            const std::vector<std::unique_ptr<FeatureParagraph>>& feature_paragraphs = source_control_file->feature_paragraphs;
-            for (const auto& feature_paragraph : feature_paragraphs)
-            {
-                for (const Dependency& d : feature_paragraph->depends)
-                {
-                    links.append(Strings::format("<Link Source=\"%s\" Target=\"%s\" />", name, d.name()));
-                }
+                links.append(Strings::format("<Link Source=\"%s\" Target=\"%s\" />", dependency.first, d));
             }
         }
 
@@ -101,17 +86,16 @@ namespace vcpkg::Commands::DependInfo
         return s;
     }
 
-    std::string create_graph_as_string(
-        const std::unordered_set<std::string>& switches,
-        const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files)
+    std::string create_graph_as_string(const std::unordered_set<std::string>& switches,
+                                       std::map<std::string, std::vector<std::string>>& dependency_tree)
     {
         if (Util::Sets::contains(switches, OPTION_DOT))
         {
-            return create_dot_as_string(source_control_files);
+            return create_dot_as_string(dependency_tree);
         }
         else if (Util::Sets::contains(switches, OPTION_DGML))
         {
-            return create_dgml_as_string(source_control_files);
+            return create_dgml_as_string(dependency_tree);
         }
         return "";
     }
@@ -158,7 +142,7 @@ namespace vcpkg::Commands::DependInfo
 
             if (!options.switches.empty())
             {
-                const std::string graph_as_string = create_graph_as_string(options.switches, source_control_files);
+                const std::string graph_as_string = create_graph_as_string(options.switches, dependency_tree);
                 System::println(graph_as_string);
                 Checks::exit_success(VCPKG_LINE_INFO);
             }
