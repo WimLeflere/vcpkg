@@ -32,27 +32,27 @@ namespace vcpkg::Commands::DependInfo
         return output;
     }
 
-    std::string create_dot_as_string(std::map<std::string, std::vector<std::string>>& dependency_tree)
+    std::string create_dot_as_string(std::map<std::string, std::vector<std::string>>& packages)
     {
         int empty_node_count = 0;
 
         std::string s;
         s.append("digraph G{ rankdir=LR; edge [minlen=3]; overlap=false;");
 
-        for (const auto& dependency : dependency_tree)
+        for (const auto& package : packages)
         {
-            if (dependency.second.empty())
+            if (package.second.empty())
             {
                 empty_node_count++;
                 continue;
             }
 
-            const std::string name = replace_dashes_with_underscore(dependency.first);
-            s.append(Strings::format("%s;", name));
-            for (const auto& d : dependency.second)
+            const std::string package_name = replace_dashes_with_underscore(package.first);
+            s.append(Strings::format("%s;", package_name));
+            for (const auto& dependency : package.second)
             {
-                const std::string dependency_name = replace_dashes_with_underscore(d);
-                s.append(Strings::format("%s -> %s;", name, dependency_name));
+                const auto dependency_name = replace_dashes_with_underscore(dependency);
+                s.append(Strings::format("%s -> %s;", package_name, dependency_name));
             }
         }
 
@@ -60,21 +60,22 @@ namespace vcpkg::Commands::DependInfo
         return s;
     }
 
-    std::string create_dgml_as_string(std::map<std::string, std::vector<std::string>>& dependency_tree)
+    std::string create_dgml_as_string(std::map<std::string, std::vector<std::string>>& packages)
     {
         std::string s;
         s.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
         s.append("<DirectedGraph xmlns=\"http://schemas.microsoft.com/vs/2009/dgml\">");
 
         std::string nodes, links;
-        for (const auto& dependency : dependency_tree)
+        for (const auto& package : packages)
         {
-            nodes.append(Strings::format("<Node Id=\"%s\" />", dependency.first));
+            const auto package_name = package.first;
+            nodes.append(Strings::format("<Node Id=\"%s\" />", package_name));
 
             // Iterate over dependencies.
-            for (const auto& d : dependency.second)
+            for (const auto& dependency : package.second)
             {
-                links.append(Strings::format("<Link Source=\"%s\" Target=\"%s\" />", dependency.first, d));
+                links.append(Strings::format("<Link Source=\"%s\" Target=\"%s\" />", package_name, dependency));
             }
         }
 
@@ -87,43 +88,42 @@ namespace vcpkg::Commands::DependInfo
     }
 
     std::string create_graph_as_string(const std::unordered_set<std::string>& switches,
-                                       std::map<std::string, std::vector<std::string>>& dependency_tree)
+                                       std::map<std::string, std::vector<std::string>>& packages)
     {
         if (Util::Sets::contains(switches, OPTION_DOT))
         {
-            return create_dot_as_string(dependency_tree);
+            return create_dot_as_string(packages);
         }
         else if (Util::Sets::contains(switches, OPTION_DGML))
         {
-            return create_dgml_as_string(dependency_tree);
+            return create_dgml_as_string(packages);
         }
         return "";
     }
 
-    void build_dependency_tree(std::map<std::string, std::vector<std::string>>& dependency_tree,
-                               const std::vector<std::string>& dependency_names,
-                               const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files)
+    void build_packages_list_with_filter(std::map<std::string, std::vector<std::string>>& packages,
+                                         const std::vector<std::string>& requested_package_names,
+                                         const std::vector<std::unique_ptr<SourceControlFile>>& source_control_files)
     {
-        for (const auto& dependency_name : dependency_names)
+        for (const auto& package_name : requested_package_names)
         {
-            if (!Util::Sets::contains(dependency_tree, dependency_name))
+            if (!Util::Sets::contains(packages, package_name))
             {
-                const auto port_file = Util::find_if(source_control_files, [&](const auto& source_control_file) {
-                    return source_control_file->core_paragraph->name == dependency_name;
-                });
+                const auto source_control_file =
+                    Util::find_if(source_control_files, [&package_name](const auto& source_control_file) {
+                        return source_control_file->core_paragraph->name == package_name;
+                    });
 
-                if (port_file != source_control_files.end())
+                if (source_control_file != source_control_files.end())
                 {
-                    dependency_tree[dependency_name] = {};
+                    packages[package_name] = {};
 
-                    const auto& port_source_paragraph = *(*port_file)->core_paragraph;
-
-                    for (const auto& child_dependency : port_source_paragraph.depends)
+                    for (const auto& dependency : (*source_control_file)->core_paragraph->depends)
                     {
-                        dependency_tree[dependency_name].push_back(child_dependency.name());
+                        packages[package_name].push_back(dependency.name());
                     }
 
-                    build_dependency_tree(dependency_tree, dependency_tree[dependency_name], source_control_files);
+                    build_packages_list_with_filter(packages, packages[package_name], source_control_files);
                 }
             }
         }
@@ -133,41 +133,39 @@ namespace vcpkg::Commands::DependInfo
     {
         const ParsedArguments options = args.parse_arguments(COMMAND_STRUCTURE);
 
-        auto source_control_files = Paragraphs::load_all_ports(paths.get_filesystem(), paths.ports);
+        const auto source_control_files = Paragraphs::load_all_ports(paths.get_filesystem(), paths.ports);
+        std::map<std::string, std::vector<std::string>> packages;
 
         if (args.command_arguments.size() >= 1)
         {
-            std::map<std::string, std::vector<std::string>> dependency_tree;
-            build_dependency_tree(dependency_tree, args.command_arguments, source_control_files);
-
-            if (!options.switches.empty())
-            {
-                const std::string graph_as_string = create_graph_as_string(options.switches, dependency_tree);
-                System::println(graph_as_string);
-                Checks::exit_success(VCPKG_LINE_INFO);
-            }
-
-            for (const auto& dependency : dependency_tree)
-            {
-                const auto dependencies = Strings::join(", ", dependency.second);
-                System::println("%s: %s", dependency.first, dependencies);
-            }
+            build_packages_list_with_filter(packages, args.command_arguments, source_control_files);
         }
         else
         {
-            if (!options.switches.empty())
+            for (const auto& source_control_file : source_control_files)
             {
-                const std::string graph_as_string = create_graph_as_string(options.switches, source_control_files);
-                System::println(graph_as_string);
-                Checks::exit_success(VCPKG_LINE_INFO);
-            }
+                const auto package_name = source_control_file->core_paragraph->name;
+                packages[package_name] = {};
 
-            for (auto&& source_control_file : source_control_files)
+                for (const auto& dependency : source_control_file->core_paragraph->depends)
+                {
+                    packages[package_name].push_back(dependency.name());
+                }
+            }
+        }
+
+        if (!options.switches.empty())
+        {
+            const auto graph_as_string = create_graph_as_string(options.switches, packages);
+            System::println(graph_as_string);
+        }
+        else
+        {
+            for (const auto& package : packages)
             {
-                const SourceParagraph& source_paragraph = *source_control_file->core_paragraph;
-                const auto s =
-                    Strings::join(", ", source_paragraph.depends, [](const Dependency& d) { return d.name(); });
-                System::println("%s: %s", source_paragraph.name, s);
+                const auto package_name = package.first;
+                const auto dependencies = Strings::join(", ", package.second);
+                System::println("%s: %s", package_name, dependencies);
             }
         }
 
